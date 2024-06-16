@@ -1,18 +1,25 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 
-contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradeable {
+contract NFTMarketplace is
+    Initializable,
+    OwnableUpgradeable,
+    ReentrancyGuardUpgradeable,
+    IERC721Receiver,
+    IERC1155Receiver
+{
     using SafeMath for uint256;
     using Address for address payable;
     using SafeERC20 for IERC20;
@@ -32,13 +39,22 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
 
     uint256 public BUYER_FEE_PERCENTAGE;
     uint256 public SELLER_FEE_PERCENTAGE;
-    uint256 public constant AUCTION_MIN_STEP = 1; // Minimal bid step in wei/tokens
+    uint256 public constant AUCTION_MIN_STEP = 10; // Minimal bid step in wei/tokens
 
     address public treasury;
     mapping(address => bool) public blacklist;
     mapping(bytes32 => Listing) public listings;
 
-    event Listed(bytes32 indexed listingId, address indexed seller, address indexed nftContract, uint256 tokenId, uint256 price, address paymentToken, bool isAuction, uint256 auctionEndTime);
+    event Listed(
+        bytes32 indexed listingId,
+        address indexed seller,
+        address indexed nftContract,
+        uint256 tokenId,
+        uint256 price,
+        address paymentToken,
+        bool isAuction,
+        uint256 auctionEndTime
+    );
     event Bought(bytes32 indexed listingId, address indexed buyer);
     event BidPlaced(bytes32 indexed listingId, address indexed bidder, uint256 amount);
     event Claimed(bytes32 indexed listingId, address indexed claimer);
@@ -83,10 +99,17 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
         _disableInitializers();
     }
 
-    function initialize(address _treasury, uint256 _buyerFeePercentage, uint256 _sellerFeePercentage) public initializer {
+    function initialize(
+        address _treasury,
+        uint256 _buyerFeePercentage,
+        uint256 _sellerFeePercentage
+    ) public initializer {
         require(_buyerFeePercentage <= 10000, "Buyer fee cannot exceed 100%");
         require(_sellerFeePercentage <= 10000, "Seller fee cannot exceed 100%");
-        
+
+        __Ownable_init(_msgSender());
+        __ReentrancyGuard_init();
+
         treasury = _treasury;
         BUYER_FEE_PERCENTAGE = _buyerFeePercentage;
         SELLER_FEE_PERCENTAGE = _sellerFeePercentage;
@@ -103,7 +126,7 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
     }
 
     function setTreasury(address _treasury) public onlyOwner returns (bool) {
-        require(treasury == _treasury, 'Account is treasury');
+        require(treasury != _treasury, "Account is treasury");
         treasury = _treasury;
         return true;
     }
@@ -137,10 +160,21 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
         // Transfer NFT to contract
         _transferNFT(nftContract, msg.sender, address(this), tokenId);
 
-        emit Listed(listingId, msg.sender, nftContract, tokenId, price, paymentToken, isAuction, listings[listingId].auctionEndTime);
+        emit Listed(
+            listingId,
+            msg.sender,
+            nftContract,
+            tokenId,
+            price,
+            paymentToken,
+            isAuction,
+            listings[listingId].auctionEndTime
+        );
     }
 
-    function buyNFT(bytes32 listingId) external payable notBlacklisted listingExists(listingId) notAuction(listingId) nonReentrant {
+    function buyNFT(
+        bytes32 listingId
+    ) external payable notBlacklisted listingExists(listingId) notAuction(listingId) nonReentrant {
         Listing storage listing = listings[listingId];
 
         uint256 totalPrice = listing.price.add(listing.price.mul(BUYER_FEE_PERCENTAGE).div(10000));
@@ -158,13 +192,15 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
         emit Bought(listingId, msg.sender);
     }
 
-    function placeBid(bytes32 listingId) external payable notBlacklisted listingExists(listingId) isAuction(listingId) nonReentrant {
+    function placeBid(
+        bytes32 listingId
+    ) external payable notBlacklisted listingExists(listingId) isAuction(listingId) nonReentrant {
         Listing storage listing = listings[listingId];
         require(block.timestamp < listing.auctionEndTime, "Auction ended");
         require(msg.value >= listing.highestBid.add(AUCTION_MIN_STEP), "Bid too low");
 
         if (listing.highestBidder != address(0)) {
-            (bool success, ) = listing.highestBidder.call{value: listing.highestBid}("");
+            (bool success, ) = listing.highestBidder.call{ value: listing.highestBid }("");
             require(success, "Refund failed");
         }
 
@@ -174,15 +210,27 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
         emit BidPlaced(listingId, msg.sender, msg.value);
     }
 
-    function claimNFT(bytes32 listingId) external notBlacklisted listingExists(listingId) isAuction(listingId) notClaimed(listingId) nonReentrant {
+    function claimNFT(
+        bytes32 listingId
+    ) external notBlacklisted listingExists(listingId) isAuction(listingId) notClaimed(listingId) nonReentrant {
         Listing storage listing = listings[listingId];
         require(block.timestamp >= listing.auctionEndTime, "Auction not ended");
 
+        uint256 highestBid = listing.highestBid;
+        uint256 fee = highestBid.mul(SELLER_FEE_PERCENTAGE).div(10000);
+        uint256 sellerProceeds = highestBid.sub(fee);
+
         if (msg.sender == listing.seller) {
-            require(listing.highestBid >= listing.price, "Reserve price not met");
+            require(highestBid >= listing.price, "Reserve price not met");
+            require(address(this).balance >= highestBid, "Insufficient contract balance to transfer funds");
+
             _transferNFT(listing.nftContract, address(this), listing.highestBidder, listing.tokenId);
-            _distributeFunds(listing.seller, listing.highestBid, address(0));
+            (bool success, ) = listing.seller.call{ value: sellerProceeds }("");
+            require(success, "Transfer to seller failed");
+            (success, ) = treasury.call{ value: fee }("");
+            require(success, "Transfer fee to treasury failed");
         } else if (msg.sender == listing.highestBidder) {
+            require(address(this).balance >= highestBid, "Insufficient contract balance to transfer NFT");
             _transferNFT(listing.nftContract, address(this), listing.highestBidder, listing.tokenId);
         } else {
             revert("Unauthorized claim");
@@ -192,7 +240,9 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
         emit Claimed(listingId, msg.sender);
     }
 
-    function cancelListing(bytes32 listingId) external notBlacklisted listingExists(listingId) notClaimed(listingId) nonReentrant {
+    function cancelListing(
+        bytes32 listingId
+    ) external notBlacklisted listingExists(listingId) notClaimed(listingId) nonReentrant {
         Listing storage listing = listings[listingId];
         require(listing.seller == msg.sender, "Not the seller");
 
@@ -208,13 +258,13 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
     }
 
     function blacklistUser(address user) external onlyOwner {
-        require(!blacklist[user], 'Account is backlisted');
+        require(!blacklist[user], "Account is backlisted");
         blacklist[user] = true;
         emit UserBlacklisted(user);
     }
 
     function removeUserFromBlacklist(address user) external onlyOwner {
-        require(blacklist[user], 'Account not exist');
+        require(blacklist[user], "Account not exist");
         blacklist[user] = false;
         emit UserRemovedFromBlacklist(user);
     }
@@ -235,15 +285,53 @@ contract NFTMarketplace is Initializable, Ownable, ReentrancyGuard, UUPSUpgradea
         uint256 sellerProceeds = price.sub(sellerFee);
 
         if (paymentToken == address(0)) {
-            payable(treasury).sendValue(buyerFee.add(sellerFee));
+            uint256 totalFee = buyerFee.add(sellerFee);
+            require(address(this).balance >= totalFee.add(sellerProceeds), "Insufficient contract balance");
+
+            payable(treasury).sendValue(totalFee);
             payable(seller).sendValue(sellerProceeds);
         } else {
-            IERC20(paymentToken).safeTransfer(treasury, buyerFee.add(sellerFee));
+            uint256 totalFee = buyerFee.add(sellerFee);
+            uint256 contractTokenBalance = IERC20(paymentToken).balanceOf(address(this));
+            require(contractTokenBalance >= totalFee.add(sellerProceeds), "Insufficient contract token balance");
+
+            IERC20(paymentToken).safeTransfer(treasury, totalFee);
             IERC20(paymentToken).safeTransfer(seller, sellerProceeds);
         }
     }
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 tokenId,
+        bytes calldata data
+    ) external override returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+
+    function onERC1155Received(
+        address operator,
+        address from,
+        uint256 id,
+        uint256 value,
+        bytes calldata data
+    ) external override returns (bytes4) {
+        return this.onERC1155Received.selector;
+    }
+
+    function onERC1155BatchReceived(
+        address operator,
+        address from,
+        uint256[] calldata ids,
+        uint256[] calldata values,
+        bytes calldata data
+    ) external override returns (bytes4) {
+        return this.onERC1155BatchReceived.selector;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IERC721Receiver).interfaceId || interfaceId == type(IERC1155Receiver).interfaceId;
+    }
 
     receive() external payable {}
 }

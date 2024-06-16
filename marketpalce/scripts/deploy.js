@@ -1,14 +1,14 @@
-const { ethers } = require("hardhat");
+const { ethers, upgrades } = require("hardhat");
 
 async function main() {
 	const [deployer] = await ethers.getSigners();
 
 	console.log("Deploying contracts with the account:", deployer.address);
 
-	const _swapToken = await ethers.getContractFactory("SwapToken");
-	const swapToken = await _swapToken.deploy();
+	const contractMarketplace = await ethers.getContractFactory("NFTMarketplace");
+	const marketplace = await upgrades.deployProxy(contractMarketplace, [deployer.address, 25, 25], { initializer: "initialize" });
 
-	console.log("Swap token address:", swapToken.target);
+	console.log("NFT Marketplace address:", marketplace.target);
 }
 
 main()

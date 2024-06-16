@@ -1,5 +1,8 @@
+import "@openzeppelin/hardhat-upgrades";
 import "@nomicfoundation/hardhat-toolbox";
 import "@typechain/hardhat";
+import "solidity-coverage";
+import "hardhat-gas-reporter";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -10,6 +13,10 @@ module.exports = {
 	paths: {
 		tests: "./tests",
 	},
+	gasReporter: {
+		enabled: true,
+		currency: 'USD',
+	  },
 	networks: {
 		testnetBsc: {
 			url: BSC_TESTNET_URL,
